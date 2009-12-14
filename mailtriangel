@@ -1,0 +1,396 @@
+#!/usr/bin/env perl
+# (c) 2009 Klaus.Franken@StrukturPunkt.de
+# Lizenz: GPL
+#
+# $Id: mailtriangel 34 2009-12-14 09:50:47Z kfr $
+# $Date: 2009-12-14 10:50:47 +0100 (Mo, 14. Dez 2009) $
+my $Version="9.12.1";
+my $Subversion = '$Id: mailtriangel 34 2009-12-14 09:50:47Z kfr $';
+#
+
+use strict;
+use warnings;
+use Getopt::Long;
+use Pod::Usage;
+use utf8;
+use encoding 'utf8';
+use Log::Log4perl;
+Log::Log4perl->init_and_watch( 'log4perl.cfg', 5 );
+my $logger = Log::Log4perl::get_logger('main');
+$logger->debug("Starting $0");
+use Mail::IMAPClient; # IMAP-Client
+use IO::Socket::SSL; # IMAP-Client mit SSL
+use Mail::Message; # Mails versenden
+use Mail::Transport::SMTP; # Mails versenden ohne SMTP
+use Email::Send; # Mails versenden mit SMTP
+use Email::Send::Gmail; # speziell für Google
+use Sys::Hostname; # hostname()
+
+
+my $optHelp=0;
+my $optDry=0;
+my $optLoglevel='';
+my $exitErr=255;
+Getopt::Long::Configure ("bundling");
+GetOptions(
+    "h"   => \$optHelp,    "help"     => \$optHelp,
+    "n"   => \$optDry,    "dry-run"     => \$optDry,
+    "l=s" => \$optLoglevel, "loglevel=s" => \$optLoglevel,
+) or pod2usage(-exitstatus => $exitErr);
+if ($optHelp) { pod2usage(-exitstatus => $exitErr, -verbose => 2);}
+
+if ($optLoglevel) {
+	if ('DEBUG' =~ /^$optLoglevel/) {
+		$logger->level($Log::Log4perl::DEBUG);
+	} elsif ('INFO' =~ /^$optLoglevel/) {
+		$logger->level($Log::Log4perl::INFO);
+	} elsif ('WARN' =~ /^$optLoglevel/) {
+		$logger->level($Log::Log4perl::WARN);
+	} elsif ('ERROR' =~ /^$optLoglevel/) {
+		$logger->level($Log::Log4perl::ERROR);
+	} else {
+		$logger->warn("loglevel $optLoglevel unknown");
+	}
+}
+
+$logger->debug("dry-run:$optDry");
+use vars qw($STAT_DIR $MAIL_TEMPLATE $SMTP_SERVER $SMTP_GOOGLE $SMTP_USER $SMTP_PASSWORD $SMTP_FROM $SMTP_EMAIL $IMAP_SERVER $IMAP_USER $IMAP_PASSWORD $IMAP_FOLDERS);
+$SMTP_SERVER='';
+$SMTP_GOOGLE=0;
+$SMTP_USER='';
+$SMTP_PASSWORD='';
+$SMTP_FROM='';
+$SMTP_EMAIL='';
+$IMAP_SERVER='';
+$IMAP_USER='';
+$IMAP_PASSWORD='';
+$IMAP_FOLDERS='INBOX';
+
+#
+# Subs
+#
+
+sub mailtriangel_send {
+	my $projekt = shift;
+	$projekt =~ s/\.cfg$//;
+	
+	# ermittel freien status
+	my $found=0;
+	my $tries=0;
+	my $status;
+	my $statusfile;
+
+	while (! $found and $tries < 1000) {
+		$status = 'mailtriangel-' . $projekt . '-' . int(rand(10000000));
+		$statusfile = $STAT_DIR . $status;
+		if (! -r $statusfile) {
+			$found=1;
+		}
+		$tries++;
+	}
+	if (! $found) {
+		$logger->error("Fehler: kann keine Statusdatei in '$STAT_DIR' ermitteln");
+	  	return($exitErr);
+	}
+	
+	# SMTP-Server
+	my $mailer;
+	if ($SMTP_GOOGLE) {
+		# mit SSL
+		$mailer = Email::Send->new(
+      	{   mailer      => 'Gmail',
+        	  mailer_args => [
+              username => $SMTP_USER,
+              password => $SMTP_PASSWORD,
+          ]
+      	}
+  );
+	} else {
+		# ohne SSL
+		$mailer=Mail::Transport::SMTP->new(hostname=>$SMTP_SERVER);
+	}
+	
+	# Template
+	my $FH = new IO::File;
+    if (! open($FH, $MAIL_TEMPLATE)) {
+	  	$logger->error("kann nicht '$MAIL_TEMPLATE' lesen: $!");
+	  	return($exitErr);   
+    }
+	my $datei;
+	while (my $line = <$FH>) {
+        $datei .= $line;
+	}
+	my $hostname = hostname();
+	$datei =~s/\$client/$hostname/gi;
+	$datei =~ s/\$subject/$status/gi;
+	$datei =~ s/\$SMTP_EMAIL/$SMTP_EMAIL/gi;
+	$datei =~ s/\$SMTP_FROM/$SMTP_FROM/gi;
+	my $message = Mail::Message->read($datei);
+
+	# Mail versenden
+	if ($SMTP_GOOGLE) {
+		# Google / Email::Send will es anders, wandel message um
+		use Email::Simple::Creator; # or other Email::
+	    my $email = Email::Simple->create(
+	        header => [
+	            From    => $SMTP_FROM,
+	            To      => $SMTP_EMAIL,
+	            Subject => $status,
+	        ],
+	        body => $message->body,
+	    );
+	    $message=$email;
+	    
+		# mit SSL
+		$logger->debug("sending email with SMTP-SSL via Email::Send::Gmail, From:$SMTP_FROM, To: $SMTP_EMAIL, Subject: $status ");
+		eval { $mailer->send($message) };
+		if ($@) {
+		  	$logger->error("kann nicht per SMTP an '$SMTP_SERVER' senden: $@");
+		  	return($exitErr);
+		}
+	} else {
+		# ohne SSL
+		my ($success, $error_code, $error_text, $error_location, $quit_success) = $mailer->trySend($message);
+		chop($error_text); # hat sonst ein \n
+		$logger->debug("$success, $error_code, $error_text, $error_location, $quit_success");
+		if (not $success) {
+		  	$logger->error("kann nicht per SMTP an '$SMTP_SERVER' senden ($error_code): $error_text");
+		  	return($exitErr);
+		}
+	}
+	$logger->info("Status-Email mit '$status' versand");
+	
+	# wenn Mail versand Status speichern
+	my $FD = new IO::File;
+	if (! open($FD, "> $statusfile")) {
+	  	$logger->error("kann die Statusdatei '$statusfile' nicht speichern: $!");
+	  	return($exitErr);
+	}
+	
+	# Ok
+	return(0);
+}
+
+sub mailtriangel_check {
+	my $projekt = shift;
+	$projekt =~ s/\.cfg$//;
+
+	
+	# read stat
+	$logger->debug("lese statusdateien aus $STAT_DIR");
+	my $FD_STAT = new IO::File;
+	if (! opendir($FD_STAT, $STAT_DIR)) {
+		$logger->error("opendir($STAT_DIR): $!");
+		return($exitErr);
+	}
+	my @STATS=readdir($FD_STAT);
+	close($FD_STAT);
+	#print join("\n* ",@STATS), "\n";
+	#return(42);
+	
+	# Check IMAP
+	
+	$logger->debug("connect IMAP_SERVER: $IMAP_SERVER");
+	# Siehe http://www.perlmonks.org/?node_id=649742
+
+	# Connect to the IMAP server via SSL
+	my $socket = IO::Socket::SSL->new(
+		PeerAddr => $IMAP_SERVER,
+ 		PeerPort => 993,
+ 	 );
+	if (! $socket) {
+	  	$logger->error("IMAP SSL-Socket auf $IMAP_SERVER fehlerhaft ($@)");
+	  	return($exitErr);
+	}
+	
+	# Build up a client attached to the SSL socket.
+	# Login is automatic as usual when we provide User and Password
+	my $imap = Mail::IMAPClient->new(
+	   Socket   => $socket,
+	   User     => $IMAP_USER,
+	   Password => $IMAP_PASSWORD,
+	  );
+	if (! $imap) {
+	  	$logger->error("IMAP Connect auf $IMAP_SERVER fehlerhaft ($@)");
+	  	return($exitErr);
+	  }
+	
+	if (! $imap->IsAuthenticated()) {
+		$logger->error("IMAP Login auf $IMAP_SERVER fehlerhaft ($@)");
+		return($exitErr);
+	}
+	#print join(", ",$imap->folders),".\n";
+	for my $FOLDER (split(/,/, $IMAP_FOLDERS)) {
+		$FOLDER =~ s/^\s+//;
+		$FOLDER =~ s/\s+$//;
+		if (! $imap->select($FOLDER)) {
+			$logger->error("IMAP-Folder '$FOLDER' nicht vorhanden ($@)");
+			return($exitErr);
+		}
+		my $msgcount = $imap->message_count();
+		$logger->debug("messages in folder '$FOLDER': $msgcount");
+		my @msgs = $imap->messages($FOLDER);
+		foreach my $msg (@msgs) {
+			# untersuche mail
+			my $subject = $imap->get_header($msg, "Subject");
+			$logger->debug("msg: $msg; subject: $subject");
+			
+			foreach my $stat (@STATS) {
+				next if ($stat =~ /^\./); # statdatei darf nicht mit "." beginnen
+				next unless $stat =~ /^mailtriangel-$projekt-/;
+				$logger->debug("suche nach $stat");
+				if ($subject =~ /^$stat$/) {
+					$logger->debug("$stat gefunden, msg: $msg");
+					my $body = $imap->body_string($msg); # s.a. "message_string" mit Header
+					#$logger->debug("body: $body");
+					if ($body =~ /$stat/) {
+						$logger->info("msg $msg enthaelt auch im Body status '$stat', loeschen");
+						if (! $optDry) {
+							$imap->delete_message($msg); # löscht, je nach Server in den Papierkorb
+							unlink($STAT_DIR . $stat);
+						} else {
+							$logger->debug("loesche nicht im dry-modus: $msg");
+						}
+					} elsif ($body) {
+						$logger->error("Kurios: msg $msg mit Subject '$stat' hat nicht erwarteten Body");
+					} else {
+						$logger->error("msg $msg mit Subject '$stat' hat leeren Body");
+					}
+				}
+			}
+		}	
+	}
+	$imap->logout();
+	
+	# sind noch statdateien übrig?
+	my $max_alter=0;
+	foreach my $stat (@STATS) {
+		next if ($stat =~ /^\./);
+		next unless $stat =~ /^mailtriangel-$projekt-/;
+		my $mtime = (stat($STAT_DIR . $stat))[9];
+		if (defined($mtime) && $mtime > 0) { # Datei existiert auch noch
+			$logger->debug("status '$stat' noch vorhanden, '$mtime'");
+			my $jetzt=time();
+			my $alter=int((time()-$mtime)/60);
+			$logger->debug("alter: $alter");
+			if ($alter > $max_alter) {
+				$max_alter=$alter;
+			}
+		}
+	}
+
+	return($max_alter);
+}
+
+sub mailtriangel_clean {
+	my $projekt = shift;
+	$projekt =~ s/\.cfg$//;
+
+	my $errors=0;
+	my $FD_STAT = new IO::File;
+	if (! opendir($FD_STAT, $STAT_DIR)) {
+		$logger->error("opendir($STAT_DIR): $!");
+		return($exitErr);
+	}
+	my @STATS=readdir($FD_STAT);
+	close($FD_STAT);
+	foreach my $stat (@STATS) {
+		next if ($stat =~ /^\./);
+		next unless $stat =~ /^mailtriangel-$projekt-/;
+		if (unlink($STAT_DIR . $stat)) {
+			$logger->debug("geloescht: $STAT_DIR " . $stat);
+		} else {
+			$logger->debug("kann nicht loeschen: $STAT_DIR " . $stat. "$!");
+			$errors++;
+		}
+	}
+	return($errors);
+}
+
+#
+# ARGV
+#
+if ($#ARGV != 1) {
+	pod2usage(-exitstatus => $exitErr);
+}
+my $projekt=$ARGV[0];
+my $modus=$ARGV[1];
+
+if (! -r $projekt and -r $projekt . '.cfg') {
+	$projekt .= '.cfg';
+}
+if (! -r $projekt) {
+	$logger->error("nicht lesbar: $projekt");
+	exit($exitErr);
+}
+require $projekt or die($!);
+if ($modus ne 'send' and $modus ne 'check' and $modus ne 'clean') {
+	pod2usage(-exitstatus => $exitErr);
+}
+$logger->debug("projekt:$projekt; modus:$modus;");
+$logger->debug("SMTP_SERVER: $SMTP_SERVER");
+$logger->debug("SMTP_USER: $SMTP_USER");
+$logger->debug("SMTP_PASSWORD: $SMTP_PASSWORD");
+$logger->debug("IMAP_SERVER: $IMAP_SERVER");
+$logger->debug("IMAP_USER: $IMAP_USER");
+$logger->debug("IMAP_PASSWORD: $IMAP_PASSWORD");
+
+my $exit;
+$exit=mailtriangel_send($projekt) if $modus eq 'send';
+$exit=mailtriangel_check($projekt) if $modus eq 'check';
+$exit=mailtriangel_clean($projekt) if $modus eq 'clean';
+
+if ($exit > $exitErr) {
+	$exit = $exitErr; # sonst wird der Wert Modulo 255 rausgegeben
+}
+if ($exit) {
+	$logger->error("exit: $exit");
+} else {
+	$logger->debug("exit: $exit");
+}
+exit $exit;
+
+__END__
+
+=head1 NAME
+
+mailtriangel - Teste Mailverbindung  
+
+=head1 SYNOPSIS
+
+mailtriangel [options] <projekt>[.cfg] send|check|clean
+
+Options:
+
+-h|--help                    brief help message
+
+-d|--dry-run                 dry-run, lösche keine Dateien und E-Mails (aber versendet)
+
+-l|--loglevel LEVEL	     loglevel: DEBUG|INFO|WARN|ERROR
+
+
+=head1 OPTIONS
+
+=over 8
+
+=item B<--help>
+
+Print a brief help message and exits.
+
+=item B<--dry-run>
+
+Dry-Mode, lösche keine Dateien und E-Mails (aber versendet)
+
+=item B<--loglevel>
+
+Setting Logevel to DEBUG|INFO|WARN|ERROR
+
+=back
+
+=head1 DESCRIPTION
+
+B<mailtriangel>: siehe README
+
+=cut
+
+

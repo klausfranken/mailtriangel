@@ -1,0 +1,16 @@
+To: $SMTP_EMAIL
+From: $SMTP_FROM
+Subject: $subject
+
+If you get this e-mail, please contact:
+	Stadt Zirndorf, edv at zirndorf.de, +49 911 911 9600190
+
+Wenn sie diese E-Mail erhalten haben, kontaktieren Sie bitte:
+	Stadt Zirndorf, edv at zirndorf.de, +49 911 911 9600190
+
+Diese Mail wurde vom Programm 'mailtriangel' auf dem Rechner $client verschickt, um die Verbindung zu testen.
+
+Die magische Zeile lautet: 
+$subject
+
+Das ist das Ende.

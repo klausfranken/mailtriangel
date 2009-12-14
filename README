@@ -1,0 +1,93 @@
+mailtriangel - (c) Klaus.Franken@StrukturPunkt.de
+
+Ziel:
+- Mailserverüberwachung 
+- selbstständig, aber gut in Nagios zu integrieren
+- externer Mailversand wird durchgeführt und überprüft
+
+Vorgehen:
+- Schritt 1: 
+-- mailtriangel-Host schickt eine E-Mail an SMTP-Server mit einem Zufallswert
+-- Statusdatei mit Zufallswert wird gespeichert (touch)
+- Schritt 2:
+-- Für alle Statusdateien:
+--- externer Mailserver wird befragt, ob E-Mail mit einem bestimmten (gespeicherten) Wert als Subject vorhanden, falls ja: löschen (optional auch Inhalt prüfen)
+--- merke alter der Statusdatei in Sekunden (falls noch vorhanden)
+-- Return: alter des ältesten Statusdatei, sonst 0
+
+Konfigurationsdatei: cfg/<projektname>.cfg
+$STAT_DIR='stat/';                          # Ordner für die Statusdateien
+$MAIL_TEMPLATE='mail_template.txt';         # Mail-Template
+$SMTP_SERVER=                               # SMTP_SERVER, kein SSL
+$SMTP_GOOGLE=1;                             # benutzt Email::Send::Gmail
+$SMTP_USER=                                 # nur fuer $SMTP_GOOGLE=1
+$SMTP_PASSWORD=                             # nur fuer $SMTP_GOOGLE=1
+$SMTP_FROM='strukturpunkt@googlemail.com';  # Absenderadre. (eigentlich unwichtig)
+$SMTP_EMAIL='strukturpunkt@googlemail.com'; # Zieladresse
+$IMAP_SERVER=                               # IMAP-SERVER, nur mit SSL !!!
+$IMAP_USER=                                 # Imap-Benutzer
+$IMAP_PASSWORD=                             # Imap-Passwort
+$IMAP_FOLDERS='INBOX, [Google Mail]/Spam';  # Ordner zu prüfen
+1;
+ 
+Beispiel für Überwachung Barista -> Google-Mail :
+barista-out.cfg 
+$STAT_DIR='stat/';
+$MAIL_TEMPLATE='mail_template.txt';
+$SMTP_SERVER='barista.zirndorf.de';
+$SMTP_EMAIL='strukturpunkt@googlemail.com';
+$IMAP_SERVER='googlemail.com';
+$IMAP_USER='strukturpunkt@googlemail.com';
+$IMAP_PASSWORD='geheim';
+$IMAP_FOLDERS='INBOX, [Google Mail]/Spam';
+
+Beispiel für Überwachung exchange -> Google-Mail:
+exchange-out.cfg
+$STAT_DIR='stat/';
+$MAIL_TEMPLATE='mail_template.txt';
+$SMTP_SERVER='exchange.zirndorf.de';
+$SMTP_EMAIL='strukturpunkt@googlemail.com';
+$IMAP_SERVER='googlemail.com';
+$IMAP_USER='strukturpunkt@googlemail.com';
+$IMAP_PASSWORD='geheim';
+
+Beispiel für Überwachung Google-Mail -> exchange: 
+exchange-in.cfg
+$STAT_DIR='stat/';
+$MAIL_TEMPLATE='mail_template.txt';
+$SMTP_SERVER='googlemail.com'; # der servername wird im GMail-Modul gesetzt
+$SMTP_GOOGLE=1;
+$SMTP_USER='strukturpunkt@googlemail.com';
+$SMTP_PASSWORD='geheim';
+$SMTP_EMAIL='edv@zirndorf.de';
+$IMAP_SERVER='exchange.zirndorf.de';
+$IMAP_USER='edv';
+$IMAP_PASSWORD='nochgeheimer';
+
+Installation:
+- Perl-Module:
+	# mehr durch Debian-Pakete:
+	apt-get install liblog-log4perl-perl libio-socket-ssl-perl libmail-box-perl libemail-send-perl libmail-imapclient-perl libnet-smtpauth-perl libemail-simple-creator-perl libdate-manip-perl
+	cpan -i Net::SMTP::SSL cpan -i Email::Send::Gmail
+
+	# mehr durch CPAN 
+	apt-get install libssl-dev # muss: falsche abhängigkeit in cpan
+	cpan -i Log::Log4perl Mail::IMAPClient IO::Socket::SSL Mail::Message Mail::Transport::SMTP Email::Send Email::Send::Gmail Sys::Hostname Email::Simple::Creator
+
+Programmaufruf:
+	./mailtriangel [-d] <projekt>[.cfg] send|check|clean
+		send: versende Testmail (Schritt 1)
+		check: prüfe auf Testmail per IMAP (Schritt 2)
+		clean: lösche Statusdateien
+Beispiel:
+	./mailtriangel exchange-in check
+
+Überwachung mit cron:
+- Loglevel auf "ERROR" stellen, nur dann wollen wir eine Mail
+- cfg anlegen und manuell testen
+- crontab-Beispiel:
+<code>
+MAILTO=Support@StrukturPunkt.de
+42 * * * * root cd /root/mailtriangel && ./mailtriangel strukturpunkt-out send
+47 * * * * root cd /root/mailtriangel && ./mailtriangel strukturpunkt-out check
+</code>
