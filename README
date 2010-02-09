@@ -1,8 +1,9 @@
 mailtriangel - (c) Klaus.Franken@StrukturPunkt.de
+# http://strukturpunkt.de/mailtriangel
 
 Ziel:
 - Mailserverüberwachung 
-- selbstständig, aber gut in Nagios zu integrieren
+- selbstständig, aber gut in Nagios zu integrieren (s. README-NAGIOS)
 - externer Mailversand wird durchgeführt und überprüft
 
 Vorgehen:

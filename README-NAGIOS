@@ -1,0 +1,19 @@
+Using Mailtriangel with Nagios:
+# http://strukturpunkt.de/mailtriangel
+
+1. cp mailtriangel /usr/lib/nagios/plugins_local (or whatevel directory is used)
+2. calling the plugin, i.e.
+	mailtriangel-nagios --project=strukturpunkt-out --type=check
+3. optional parameters:
+	--loglevel=.. (see mailtriangel)
+	--path=.. (path of mailtriangel, default: /root/mailtriangel)
+	--warning=n (default: 5 minutes)
+	--critical=n (default: 20 minutes)
+
+Exitcodes:
+	as Nagios likes the exitcodes
+
+Messages:
+If OK only "OK" ist printing, everything else is warning or error and give a hint whats
+going wrong.
+

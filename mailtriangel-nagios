@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+# http://strukturpunkt.de/mailtriangel
+# (c) 2009-2010 Klaus.Franken@StrukturPunkt.de
+# Lizenz: GPL
+#
+# $Id: mailtriangel 34 2009-12-14 09:50:47Z kfr $
+# $Date: 2009-12-14 10:50:47 +0100 (Mo, 14. Dez 2009) $
+
+use strict;
+use warnings;
+use Nagios::Clientstatus;
+
+my $version = "10.2.1";
+my $ncli    = Nagios::Clientstatus->new(
+   help_subref => \&help,
+   version     => $version,
+
+   mandatory_args => [ "project", "type" ],
+   optional_args => [ 'loglevel', 'path', 'critical', 'warning' ],
+);
+
+my $loglevel = $ncli->get_given_arg('loglevel');
+my $path = $ncli->get_given_arg('path') || '/root/mailtriangel';
+my $critical = $ncli->get_given_arg('critical') || 20; # minutes
+my $warning = $ncli->get_given_arg('warning') || 10; # minutes
+my $project= $ncli->get_given_arg('project');
+my $type= $ncli->get_given_arg('type');
+
+# Set defaults
+# Message for the user to read
+my $msg = "unknown mail status";
+# Statuscode for Nagios (OK|WARNING|CRITICAL|UNKNOWN)
+my $status = $ncli->exitvalue('unknown');
+my $internal_error = $ncli->exitvalue('unknown'); # interner Fehler -> Nagios-Status unknown
+
+# chdir
+if (not chdir($path)) {
+	$status = $internal_error;
+	$msg="can't chdir($path): $!";
+	goto END;
+}
+
+# do the command
+my $cmd="./mailtriangel $project $type";
+$cmd .= " --loglevel=$loglevel" if $loglevel;
+$msg = `$cmd 2>&1`;
+my $exitcode=$? / 256;
+
+if ($exitcode >= 255) {
+	$msg .= "Oldest mail very old or internal error";
+	$status = $ncli->exitvalue('CRITICAL');
+} elsif ($exitcode >= $critical) {
+	$msg .= "Oldest mail $exitcode minutes";
+	$status = $ncli->exitvalue('CRITICAL');
+} elsif ($exitcode >= $warning) {
+	$msg .= "Oldest mail $exitcode minutes";
+	$status = $ncli->exitvalue('WARNING');
+} elsif ($exitcode < 0) {
+	# `$cmd` was unsuccessfull
+	$msg = $!;
+	$status = $internal_error;
+} else {
+	$msg="OK"; # no other messages
+	$status = $ncli->exitvalue('OK');
+}
+
+END:
+print $msg;
+print "\n"; # FIXME
+exit $status;
+
+sub help {
+   print "Usage:\n";
+   print "$0 --project=... --type=send|check|clean [--loglevel=DEBUG|INFO|WARN|ERROR]";
+   print "\n"; # FIXME
+   exit Nagios::Clientstatus::exitvalue('OK');
+}
+
